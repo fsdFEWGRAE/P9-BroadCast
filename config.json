@@ -1,8 +1,6 @@
 {
   "ticketRoom": "1440508751412203570",
   "shopRoom": "1439600517063118989",
-
-  "headerImage": "حط هنا رابط صورة P9 (https://cdn.discordapp.com/attachments/1438169803490721903/1440640898840002641/ChatGPT_Image_16_2025_02_30_33_.png?ex=691ee4e4&is=691d9364&hm=256ec54d66a9b26bed5d0ed0e0dbc9eaccee9527e22f2e600d1fe9f734afc032&)",
-
+  "headerImage": "https://cdn.discordapp.com/attachments/1438169803490721903/1440640898840002641/ChatGPT_Image_16_2025_02_30_33_.png?ex=691ee4e4&is=691d9364&hm=256ec54d66a9b26bed5d0ed0e0dbc9eaccee9527e22f2e600d1fe9f734afc032&",
   "embedColor": "#0a1f44"
 }
