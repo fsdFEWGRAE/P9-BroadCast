@@ -1,5 +1,4 @@
 import express from "express";
-import fs from "fs";
 import {
   Client,
   GatewayIntentBits,
@@ -13,21 +12,37 @@ import {
   EmbedBuilder,
   StringSelectMenuBuilder
 } from "discord.js";
-import translate from "@vitalets/google-translate-api";
-import config from "./config.json" assert { type: "json" };
+import fs from "fs";
 
 // ====================== CONFIG ======================
 const PREFIX = "+";
-const BOT_TOKEN = process.env.BOT_TOKEN;
 const OWNER_ID = process.env.OWNER_ID;
+const BOT_TOKEN = process.env.BOT_TOKEN;
 
-// من config.json
+// إعدادات من config.json (اختيارية)
+let config = {
+  ticketRoom: "1440508751412203570",
+  shopRoom: "1439600517063118989",
+  headerImage:
+    "https://cdn.discordapp.com/attachments/1438169803490721903/1440640898840002641/ChatGPT_Image_16_2025_02_30_33_.png",
+  embedColor: "#0a1f44"
+};
+
+try {
+  if (fs.existsSync("./config.json")) {
+    const fileData = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+    config = { ...config, ...fileData };
+  }
+} catch (err) {
+  console.warn("⚠️ لم أستطع قراءة config.json، سأستخدم الإعدادات الافتراضية.", err);
+}
+
 const TICKET_ROOM = config.ticketRoom;
 const SHOP_ROOM = config.shopRoom;
 const HEADER_IMAGE = config.headerImage;
-const EMBED_COLOR = config.embedColor || "#0a1f44";
+const EMBED_COLOR = config.embedColor;
 
-// ======= تحميل الحملات من ملف (لو موجود) =======
+// ========== تحميل الحملات من JSON ==========
 let broadcasts = {};
 if (fs.existsSync("./broadcasts.json")) {
   try {
@@ -37,28 +52,19 @@ if (fs.existsSync("./broadcasts.json")) {
   }
 }
 
-// ======= دالة حفظ الحملات =======
-function saveBroadcasts() {
-  fs.writeFileSync(
-    "./broadcasts.json",
-    JSON.stringify(broadcasts, null, 2),
-    "utf8"
-  );
+// =============== بلوك إنجليزي عام حول الرسالة ===============
+function buildEnglishBlock(arabicText) {
+  return [
+    "This is an announcement from the server administration.",
+    "",
+    "Original message (written in Arabic):",
+    arabicText,
+    "",
+    "If you need assistance, feel free to open a ticket or visit the shop channel."
+  ].join("\n");
 }
 
-// ======= دالة ترجمة عربية → إنجليزي =======
-async function translateToEnglish(text) {
-  try {
-    const res = await translate(text, { from: "ar", to: "en" });
-    return res.text;
-  } catch (err) {
-    console.error("Translate error:", err.message);
-    // لو الترجمة فشلت نرجع نفس النص
-    return text;
-  }
-}
-
-// ====================== DISCORD CLIENT ======================
+// ====================== CLIENT ======================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -70,18 +76,19 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
+// ====================== READY ======================
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ====================== KEEP ALIVE (Render) ======================
+// ====================== EXPRESS KEEPALIVE ======================
 const app = express();
-app.get("/", (_req, res) => res.send("P9 Broadcast Bot is running ✅"));
+app.get("/", (req, res) => res.send("Bot is running"));
 app.listen(process.env.PORT || 10000, () =>
-  console.log("🌐 HTTP keep-alive server started")
+  console.log("🌐 Render KeepAlive Active")
 );
 
-// ====================== MESSAGE HANDLER ======================
+// ====================== MESSAGE COMMAND ======================
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (!message.content.startsWith(PREFIX)) return;
@@ -89,10 +96,10 @@ client.on("messageCreate", async (message) => {
   const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
   const command = args.shift()?.toLowerCase();
 
-  // ======= أمر +send → فتح قائمة الرتب =======
+  // --------- +send ---------
   if (command === "send") {
     if (message.author.id !== OWNER_ID) {
-      return message.reply("❌ هذا الأمر فقط لصاحب البوت (الأونر).");
+      return message.reply("❌ هذا الأمر فقط للأونر.");
     }
 
     if (!message.guild) {
@@ -100,31 +107,26 @@ client.on("messageCreate", async (message) => {
     }
 
     const roles = message.guild.roles.cache
-      .filter(
-        (r) =>
-          r.id !== message.guild.id && // استبعاد @everyone
-          !r.managed && // استبعاد رتب البوتات الخارجية
-          r.members.size > 0
-      )
-      .sort((a, b) => b.position - a.position);
+      .filter((r) => r.id !== message.guild.id && r.members.size > 0)
+      .sort((a, b) => b.position - a.position)
+      .first(25); // أقصى شيء 25 خيار في السليكت منيو
 
-    if (!roles.size) {
+    if (!roles.length) {
       return message.reply("⚠ لا يوجد رتب تحتوي أعضاء.");
     }
 
-    // Discord يسمح بـ 25 خيار كحد أقصى في السليكت
-    const options = roles.map((role) => ({
-      label: role.name.slice(0, 100),
-      description: `Members: ${role.members.size}`.slice(0, 100),
-      value: role.id
-    })).slice(0, 25);
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId("roleSelect")
+      .setPlaceholder("اختر الرتبة / Select a role")
+      .addOptions(
+        roles.map((role) => ({
+          label: role.name.slice(0, 25),
+          description: `الأعضاء: ${role.members.size}`,
+          value: role.id
+        }))
+      );
 
-    const select = new StringSelectMenuBuilder()
-      .setCustomId("selectRole")
-      .setPlaceholder("اختر الرتبة لإرسال الإعلان / Select a role")
-      .addOptions(options);
-
-    const row = new ActionRowBuilder().addComponents(select);
+    const row = new ActionRowBuilder().addComponents(selectMenu);
 
     return message.reply({
       content: "🔽 **اختر الرتبة التي تريد إرسال الإعلان لها:**",
@@ -132,21 +134,17 @@ client.on("messageCreate", async (message) => {
     });
   }
 
-  // ======= +bcdelete ID → حذف الحملة من الخاص =======
+  // --------- +bcdelete ID ---------
   if (command === "bcdelete") {
     if (message.author.id !== OWNER_ID) {
-      return message.reply("❌ هذا الأمر فقط لصاحب البوت.");
+      return message.reply("❌ هذا الأمر فقط للأونر.");
     }
 
     const id = args[0];
-    if (!id) {
-      return message.reply("❌ استخدم الأمر هكذا:\n`+bcdelete رقم_الحملة`");
-    }
+    if (!id) return message.reply("❌ استخدم: `+bcdelete رقم_الحملة`");
 
     const data = broadcasts[id];
-    if (!data) {
-      return message.reply("⚠ لا يوجد حملة بهذا الرقم (أو تم حذفها سابقًا).");
-    }
+    if (!data) return message.reply("⚠ لا يوجد حملة بهذا الرقم.");
 
     let deleted = 0;
     for (const entry of data) {
@@ -157,183 +155,160 @@ client.on("messageCreate", async (message) => {
         await msg.delete();
         deleted++;
       } catch {
-        // غالبًا العضو حاذف الرسالة أو الـ DM قديم / مقفول
+        // ممكن العضو حاذف الرسالة أو مقفل الخاص
       }
     }
 
     delete broadcasts[id];
-    saveBroadcasts();
+    fs.writeFileSync("./broadcasts.json", JSON.stringify(broadcasts, null, 2));
 
     return message.reply(
-      `🗑️ تم محاولة حذف رسائل الحملة \`${id}\`.\n✅ تم حذف **${deleted}** رسالة من الخاص (الباقي يمكن ما قدرنا نوصل له).`
+      `🗑️ تم محاولة حذف رسائل الحملة.\n🗑️ المحذوف فعلياً: **${deleted}** رسالة.`
     );
   }
 });
 
 // ====================== INTERACTIONS ======================
 client.on("interactionCreate", async (interaction) => {
-  // ======= SELECT MENU لاختيار الرتبة =======
-  if (interaction.isStringSelectMenu()) {
-    if (interaction.customId === "selectRole") {
-      const roleId = interaction.values[0];
-      const role = interaction.guild.roles.cache.get(roleId);
+  // ----- اختيار الرتبة (Select Menu) -----
+  if (interaction.isStringSelectMenu() && interaction.customId === "roleSelect") {
+    const roleId = interaction.values[0];
+    const role = interaction.guild.roles.cache.get(roleId);
 
-      if (!role) {
-        return interaction.reply({
-          content: "❌ هذه الرتبة لم تعد موجودة.",
-          ephemeral: true
-        });
-      }
-
-      // مودال نص الإعلان
-      const modal = new ModalBuilder()
-        .setCustomId(`announceModal_${roleId}`)
-        .setTitle("نص الإعلان / Announcement");
-
-      const textInput = new TextInputBuilder()
-        .setCustomId("announcementText")
-        .setLabel("نص الإعلان (عربي)")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true);
-
-      const row = new ActionRowBuilder().addComponents(textInput);
-      modal.addComponents(row);
-
-      return interaction.showModal(modal);
+    if (!role) {
+      return interaction.reply({ content: "❌ الرتبة غير موجودة.", ephemeral: true });
     }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`msgModal_${roleId}`)
+      .setTitle("نص الإعلان / Announcement");
+
+    const input = new TextInputBuilder()
+      .setCustomId("msgContent")
+      .setLabel("نص الإعلان بالعربي")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setPlaceholder("اكتب نص الإعلان هنا..."); // <= أقل من 45 حرف عشان ما يرجع نفس الخطأ
+
+    const row = new ActionRowBuilder().addComponents(input);
+    modal.addComponents(row);
+
+    return interaction.showModal(modal);
   }
 
-  // ======= MODAL SUBMIT =======
-  if (interaction.isModalSubmit()) {
-    if (interaction.customId.startsWith("announceModal_")) {
-      const roleId = interaction.customId.split("_")[1];
-      const role = interaction.guild.roles.cache.get(roleId);
+  // ----- استلام نص الإعلان من المودال -----
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("msgModal_")) {
+    const roleId = interaction.customId.split("_")[1];
+    const role = interaction.guild.roles.cache.get(roleId);
 
-      if (!role) {
-        return interaction.reply({
-          content: "❌ الرتبة لم تعد موجودة.",
-          ephemeral: true
-        });
-      }
+    if (!role) {
+      return interaction.reply({ content: "❌ الرتبة لم تعد موجودة.", ephemeral: true });
+    }
 
-      const msgAR = interaction.fields.getTextInputValue("announcementText");
+    const msgAR = interaction.fields.getTextInputValue("msgContent");
+    const msgEN = buildEnglishBlock(msgAR);
 
-      // ترجمة للنص اللي كتبه الأونر
-      const msgEN = await translateToEnglish(msgAR);
+    const members = role.members.filter((m) => !m.user.bot);
 
-      const members = role.members.filter((m) => !m.user.bot);
-      const total = members.size;
-
-      if (total === 0) {
-        return interaction.reply({
-          content: "⚠ لا يوجد أعضاء بشر يحملون هذه الرتبة.",
-          ephemeral: true
-        });
-      }
-
-      await interaction.reply({
-        content: `⏳ جاري إرسال الإعلان إلى **${total}** عضو...`,
-        ephemeral: true
-      });
-
-      const campaignId = Date.now().toString();
-      broadcasts[campaignId] = [];
-
-      let failed = 0;
-
-      // أزرار (عربي + English)
-      const buttons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setLabel("🎫 افتح تذكرة | Open Ticket")
-          .setStyle(ButtonStyle.Link)
-          .setURL(
-            `https://discord.com/channels/${interaction.guild.id}/${TICKET_ROOM}`
-          ),
-        new ButtonBuilder()
-          .setLabel("🛒 روم الشراء | Shop Room")
-          .setStyle(ButtonStyle.Link)
-          .setURL(
-            `https://discord.com/channels/${interaction.guild.id}/${SHOP_ROOM}`
-          )
-      );
-
-      for (const [memberId, member] of members) {
-        try {
-          const dm = await member.createDM();
-
-          // امبد عربي كبير
-          const embedAR = new EmbedBuilder()
-            .setColor(EMBED_COLOR)
-            .setImage(HEADER_IMAGE)
-            .setTitle("📢 إعلان جديد من الإدارة")
-            .setDescription(
-              [
-                "━━━━━━━━━━━━━━━━━━━━",
-                "**الرسالة بالعربي:**",
-                "",
-                `> ${msgAR}`,
-                "",
-                "📢 **هذا إعلان رسمي من إدارة السيرفر**",
-                "━━━━━━━━━━━━━━━━━━━━"
-              ].join("\n")
-            )
-            .setFooter({ text: `Server: ${interaction.guild.name}` })
-            .setTimestamp();
-
-          // امبد إنجليزي كبير
-          const embedEN = new EmbedBuilder()
-            .setColor(EMBED_COLOR)
-            .setTitle("📢 Official Announcement From The Administration")
-            .setDescription(
-              [
-                "━━━━━━━━━━━━━━━━━━━━",
-                `**Message in English:**`,
-                "",
-                msgEN,
-                "",
-                "📢 **This is an official announcement from the administration.**",
-                "━━━━━━━━━━━━━━━━━━━━"
-              ].join("\n")
-            )
-            .setFooter({ text: `Server: ${interaction.guild.name}` })
-            .setTimestamp();
-
-          const sentMsg = await dm.send({
-            content: `<@${member.id}>`,
-            embeds: [embedAR, embedEN],
-            components: [buttons]
-          });
-
-          broadcasts[campaignId].push({
-            userId: member.id,
-            messageId: sentMsg.id
-          });
-        } catch (err) {
-          failed++;
-        }
-      }
-
-      saveBroadcasts();
-
-      return interaction.followUp({
-        content: [
-          `✅ تم إرسال الإعلان للحملة \`${campaignId}\`.`,
-          `👥 عدد المستلمين: **${total - failed}**`,
-          failed > 0
-            ? `⚠ لم نتمكن من الإرسال إلى **${failed}** عضو (غالبًا مقفلين الخاص أو حاذفين الـ DM).`
-            : "✨ تم الإرسال لجميع الأعضاء بنجاح.",
-          "",
-          `🗑 لحذف رسائل هذه الحملة من الخاص استخدم:\n\`+bcdelete ${campaignId}\``
-        ].join("\n"),
+    if (!members.size) {
+      return interaction.reply({
+        content: "⚠ لا يوجد أعضاء يملكون هذه الرتبة.",
         ephemeral: true
       });
     }
+
+    await interaction.reply({
+      content: `⏳ جاري إرسال الإعلان إلى **${members.size}** عضو...`,
+      ephemeral: true
+    });
+
+    const id = Date.now().toString();
+    broadcasts[id] = [];
+
+    const buttons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel("🎫 فتح تذكرة | Open Ticket")
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://discord.com/channels/${interaction.guild.id}/${TICKET_ROOM}`),
+      new ButtonBuilder()
+        .setLabel("🛒 روم الشراء | Shop Channel")
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://discord.com/channels/${interaction.guild.id}/${SHOP_ROOM}`)
+    );
+
+    let success = 0;
+    let failed = 0;
+
+    for (const [memberId, member] of members) {
+      try {
+        const dm = await member.createDM();
+
+        const embedAR = new EmbedBuilder()
+          .setColor(EMBED_COLOR)
+          .setImage(HEADER_IMAGE) // الصورة اللي طلبتها
+          .setTitle("📢 إعلان جديد من الإدارة")
+          .setDescription(
+            [
+              "━━━━━━━━━━━━━━━━━━━",
+              "**الرسالة بالعربي:**",
+              msgAR,
+              "",
+              "📢 **هذا إعلان من إدارة السيرفر**",
+              "━━━━━━━━━━━━━━━━━━━"
+            ].join("\n")
+          )
+          .setFooter({ text: `السيرفر: ${interaction.guild.name}` })
+          .setTimestamp();
+
+        const embedEN = new EmbedBuilder()
+          .setColor(EMBED_COLOR)
+          .setTitle("📢 New Announcement From The Administration")
+          .setDescription(
+            [
+              "━━━━━━━━━━━━━━━━━━━",
+              msgEN,
+              "",
+              "📢 This is an announcement from the administration.",
+              "━━━━━━━━━━━━━━━━━━━"
+            ].join("\n")
+          )
+          .setFooter({ text: `Server: ${interaction.guild.name}` })
+          .setTimestamp();
+
+        const sentMsg = await dm.send({
+          content: `<@${member.id}>`,
+          embeds: [embedAR, embedEN],
+          components: [buttons]
+        });
+
+        broadcasts[id].push({
+          userId: member.id,
+          messageId: sentMsg.id
+        });
+        success++;
+      } catch (err) {
+        // العضو قافل الخاص أو مانع الرسائل
+        failed++;
+      }
+    }
+
+    fs.writeFileSync("./broadcasts.json", JSON.stringify(broadcasts, null, 2));
+
+    return interaction.followUp({
+      content:
+        `✅ تم إرسال الإعلان إلى **${success}** عضو.\n` +
+        (failed
+          ? `⚠ تعذر الإرسال إلى **${failed}** عضو (الغالب قافلين الخاص أو مانعين الرسائل من السيرفر).`
+          : "✨ لم يحصل أي خطأ في الإرسال.") +
+        `\n\n📛 رقم الحملة: \`${id}\`\n🗑 لحذفها: \`+bcdelete ${id}\``,
+      ephemeral: true
+    });
   }
 });
 
 // ====================== LOGIN ======================
-if (!BOT_TOKEN || !OWNER_ID) {
-  console.error("❌ لازم تضيف BOT_TOKEN و OWNER_ID في السيكريت على Render.");
+if (!BOT_TOKEN) {
+  console.error("❌ BOT_TOKEN غير موجود في السيكريت.");
   process.exit(1);
 }
 
